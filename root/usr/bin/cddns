@@ -511,13 +511,6 @@ handle_service() {
 		return 1
 	fi
 
-	# validate the provider before dispatching so a typo is reported
-	# instead of silently doing nothing
-	case "$provider" in
-	tencent|aliyun) : ;;
-	*) log ERROR "[$plabel][${subdomain}.${domain}] unknown provider: $provider"; return 1 ;;
-	esac
-
 	case "$provider" in
 	tencent)
 		if [ "$tc_mode" = "cam" ]; then
