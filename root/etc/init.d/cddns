@@ -21,14 +21,16 @@ start() {
 	# keep plaintext credentials out of other local users' reach right away
 	chmod 600 /etc/config/cddns 2>/dev/null
 
-	# one-shot backstop check ~1 min after every start (boot or reload)
 	config_get_bool enabled global enabled 1
 	if [ "$enabled" = "1" ]; then
+		# one-shot backstop check ~1 min after every start (boot or reload)
 		setsid /usr/bin/cddns start-delayed </dev/null >/dev/null 2>&1 &
+		# keep the cron entry aligned with the configured interval
+		/usr/bin/cddns sync_cron
+	else
+		# switch off: no periodic wake-ups at all
+		remove_cron
 	fi
-
-	# keep the cron entry aligned with the configured interval
-	/usr/bin/cddns sync_cron
 }
 
 # remove the cron entry without restarting cron; start() reloads after writing
