@@ -1,12 +1,16 @@
 #!/bin/sh
 # CDDNS: run an update right after a relevant WAN interface comes up.
 # This file is package-owned (declarative), so no runtime management needed.
-# The switch state is re-validated by the delayed guard at fire time.
+# The switch is checked here and re-validated by the delayed guard.
 [ "$ACTION" = "ifup" ] || exit 0
 
 . /lib/functions.sh
 
 config_load cddns
+
+# global switch off: stay fully silent (guard re-checks anyway)
+config_get_bool genabled global enabled 1
+[ "$genabled" = "1" ] || exit 0
 
 # only react to interfaces used by enabled services (default wan)
 match=0
