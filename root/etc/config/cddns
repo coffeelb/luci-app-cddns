@@ -1,0 +1,18 @@
+
+config cddns 'global'
+	option enabled '0'
+	# 可选 5|10|15|20|30|60 分钟
+	option interval '15'
+	option log_lines '200'
+
+# Example service section (add more via the web UI):
+# config service
+#	option enabled '1'
+#	option provider 'tencent'        # tencent | aliyun
+#	option domain 'example.com'
+#	option subdomain 'home'
+#	option record_type 'A'           # A | AAAA
+#	option ip_source 'iface'         # iface | url | custom
+#	option iface 'wan'
+#	option secret_id ''
+#	option secret_key ''

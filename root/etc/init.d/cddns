@@ -1,0 +1,68 @@
+#!/bin/sh /etc/rc.common
+# CDDNS init script: cron driven; WAN reconnect updates are handled by the
+# declarative hotplug file at /etc/hotplug.d/iface/90-cddns
+
+START=99
+STOP=10
+
+. /lib/functions.sh
+
+CRON_FILE=/etc/crontabs/root
+
+# drop any existing cddns line from the crontab (used by both start and stop)
+remove_cron() {
+	sed -i '/usr\/bin\/cddns/d' "$CRON_FILE" 2>/dev/null
+}
+
+start() {
+	local interval cron_expr enabled
+
+	config_load cddns
+	# keep plaintext credentials out of other local users' reach right away
+	chmod 600 /etc/config/cddns 2>/dev/null
+
+	# mark the service as running so hotplug triggers can proceed
+	mkdir -p /var/run/cddns
+	touch /var/run/cddns/running
+
+	# one-shot backstop check ~1 min after every start (boot or reload) in
+	# case the WAN IP is not ready yet; only when enabled
+	config_get_bool enabled global enabled 1
+	if [ "$enabled" = "1" ]; then
+		/usr/bin/cddns start-delayed </dev/null >/dev/null 2>&1 &
+	fi
+
+	# cron drives the configured interval directly; whitelist the values
+	# that map cleanly to cron expressions (60 minutes is hourly)
+	config_get interval global interval 15
+	case "$interval" in
+	5|10|15|20|30) cron_expr="*/$interval * * * * /usr/bin/cddns guard" ;;
+	60)            cron_expr="0 * * * * /usr/bin/cddns guard" ;;
+	*)             cron_expr="*/15 * * * * /usr/bin/cddns guard" ;;
+	esac
+	[ -f "$CRON_FILE" ] || { mkdir -p /etc/crontabs; touch "$CRON_FILE"; }
+	remove_cron
+	echo "$cron_expr" >> "$CRON_FILE"
+	/etc/init.d/cron restart 2>/dev/null
+}
+
+# remove the cron entry without restarting cron; start() reloads after writing
+cleanup() {
+	remove_cron
+}
+
+stop() {
+	# clear the running marker so new hotplug triggers are refused
+	rm -f /var/run/cddns/running
+	cleanup
+	# kill in-flight cddns scripts by full cmdline (pkill is not in stock busybox)
+	for f in $(grep -la '/usr/bin/cddns' /proc/[0-9]*/cmdline 2>/dev/null); do
+		pid=${f#/proc/}; pid=${pid%%/*}
+		[ "$pid" = "$$" ] || kill "$pid" 2>/dev/null
+	done
+}
+
+reload_service() {
+	stop
+	start
+}

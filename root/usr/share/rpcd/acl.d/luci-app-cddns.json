@@ -1,0 +1,19 @@
+{
+	"luci-app-cddns": {
+		"description": "Grant access to CDDNS",
+		"read": {
+			"file": {
+				"/var/log/cddns.log": [ "read" ],
+				"/tmp/log/cddns.log": [ "read" ]
+			},
+			"uci": [ "cddns" ]
+		},
+		"write": {
+			"file": {
+				"/usr/bin/cddns": [ "exec" ],
+				"/etc/init.d/cddns": [ "exec" ]
+			},
+			"uci": [ "cddns" ]
+		}
+	}
+}

@@ -1,0 +1,13 @@
+{
+	"admin/services/cddns": {
+		"title": "CDDNS",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "cddns"
+		},
+		"depends": {
+			"acl": [ "luci-app-cddns" ]
+		}
+	}
+}

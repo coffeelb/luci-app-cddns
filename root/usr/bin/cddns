@@ -1,0 +1,623 @@
+#!/bin/sh
+# CDDNS core updater: Tencent Cloud (DNSPod) + Alibaba Cloud (Alidns)
+# POSIX/ash only, no bashisms.
+
+. /lib/functions.sh
+. /lib/functions/network.sh
+
+CFG=cddns
+STATE_DIR=/var/run/cddns
+LOG_FILE=/var/log/cddns.log
+CRON_FILE=/etc/crontabs/root
+LOG_LINES=200
+MAX_SERVICES=5
+SERVICE_COUNT=0
+LOCK_DIR="$STATE_DIR/lock"
+NL='
+'
+TAB=$(printf '\t')
+
+mkdir -p "$STATE_DIR"
+# keep plaintext credentials out of other local users' reach (uci rewrites this on save)
+chmod 600 /etc/config/cddns 2>/dev/null
+
+log() {
+	local lvl="$1"; shift
+	printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$lvl" "$*" >> "$LOG_FILE"
+}
+
+trim_log() {
+	[ -f "$LOG_FILE" ] || return 0
+	local cnt
+	cnt=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+	if [ "$cnt" -gt "$LOG_LINES" ] 2>/dev/null; then
+		tail -n "$LOG_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
+	fi
+}
+
+# RFC3986 percent-encode each line of stdin (one awk pass per batch)
+urlencode_lines() {
+	awk 'BEGIN {
+		for (i = 0; i < 256; i++) o[sprintf("%c", i)] = i
+	}
+	{
+		n = length($0); r = ""
+		for (i = 1; i <= n; i++) {
+			c = substr($0, i, 1)
+			if (c ~ /^[A-Za-z0-9._~-]$/) r = r c
+			else r = r sprintf("%%%02X", o[c])
+		}
+		print r
+	}'
+}
+
+urlencode() { printf '%s\n' "$1" | urlencode_lines; }
+
+# byte->hex via awk (od is not enabled in stock OpenWrt busybox)
+hex_of() {
+	printf '%s' "$1" | awk 'BEGIN {
+		for (i = 0; i < 256; i++) h[sprintf("%c", i)] = sprintf("%02X", i)
+	}
+	{
+		for (i = 1; i <= length($0); i++) printf "%s", h[substr($0, i, 1)]
+	}'
+}
+sha256_hex()      { printf '%s' "$1" | openssl dgst -sha256 | awk '{print $NF}'; }
+hmac_sha256_hex()  { printf '%s' "$2" | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$1" | awk '{print $NF}'; }
+
+# JSON string escaping for payload values
+json_escape() {
+	printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\r\t\b\f' '     '
+}
+
+# crude IP pre-check per record type; the provider API is the real validator
+validate_ip() { # ip rtype -> 0 ok
+	local ip="$1" rtype="$2"
+	if [ "$rtype" = "AAAA" ]; then
+		case "$ip" in
+		*:*:*) : ;;
+		*) return 1 ;;
+		esac
+		[ "${#ip}" -le 45 ] || return 1
+		echo "$ip" | grep -Eq '^[0-9a-fA-F:]+$'
+	else
+		echo "$ip" | grep -Eq '^((25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})$'
+	fi
+}
+
+# simple single-instance lock (mkdir-based, POSIX-safe)
+lock() {
+	local pid
+	while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+		pid=$(cat "$LOCK_DIR/pid" 2>/dev/null)
+		# reclaim the lock when the previous owner is gone
+		if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+			rm -rf "$LOCK_DIR"
+			continue
+		fi
+		sleep 1
+	done
+	echo $$ > "$LOCK_DIR/pid"
+}
+
+unlock() {
+	[ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK_DIR"
+}
+
+# ---------- IP acquisition ----------
+get_ip() {
+	local src="$1" iface="$2" url="$3" custom="$4" v6="$5" ip=""
+
+	case "$src" in
+	custom)
+		ip="$custom"
+		;;
+	url)
+		if [ "$v6" = "1" ]; then
+			ip=$(curl -fsS -m 20 "$url" 2>/dev/null | \
+				grep -oE '([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}' | head -n1)
+		else
+			ip=$(curl -fsS -m 20 "$url" 2>/dev/null | \
+				grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
+		fi
+		;;
+	*)
+		if [ "$v6" = "1" ]; then
+			network_get_ipaddr6 ip "$iface" 2>/dev/null
+			# ignore link-local / ULA addresses reported by netifd
+			case "$ip" in
+			fe80:*|fec0:*|fd*|fc*) ip="" ;;
+			esac
+		else
+			network_get_ipaddr ip "$iface" 2>/dev/null
+		fi
+		;;
+	esac
+	echo "$ip"
+}
+
+# pick_record resp path id_field line_field value_field want_line
+# prints "rid<TAB>cur<TAB>rec_line<TAB>found"; rid is only set when a record
+# matches want_line exactly, found=1 when at least one record exists
+pick_record() {
+	local resp="$1" path="$2" idf="$3" linef="$4" valf="$5" want="$6"
+	local i=0 rid="" cur="" rec_line="" found=0 item rid_i line_i val_i
+	while :; do
+		# terminate on the array element itself, never on a missing field
+		item=$(jsonfilter -s "$resp" -e "${path}[$i]" 2>/dev/null)
+		[ -z "$item" ] && break
+		found=1
+		rid_i=$(jsonfilter -s "$item" -e "@.$idf" 2>/dev/null)
+		line_i=$(jsonfilter -s "$item" -e "@.$linef" 2>/dev/null)
+		val_i=$(jsonfilter -s "$item" -e "@.$valf" 2>/dev/null)
+		if [ "$line_i" = "$want" ]; then
+			rid=$rid_i; cur=$val_i; rec_line=$line_i
+			break
+		fi
+		i=$((i + 1))
+	done
+	printf '%s\t%s\t%s\t%s\n' "$rid" "$cur" "$rec_line" "$found"
+}
+
+split_record() {
+	local rest
+	rid=${1%%"$TAB"*}
+	rest=${1#*"$TAB"}
+	cur=${rest%%"$TAB"*}
+	rest=${rest#*"$TAB"}
+	rec_line=${rest%%"$TAB"*}
+	rest=${rest#*"$TAB"}
+	found=${rest%%"$TAB"*}
+}
+
+# ---------- Tencent Cloud (DNSPod) API 3.0, TC3-HMAC-SHA256 ----------
+tc3_call() { # sid skey host service action payload
+	local sid="$1" skey="$2" host="$3" service="$4" action="$5" payload="$6"
+	local ts date hashed_payload action_lc canon_headers signed_headers canon_req hashed_canon
+	local cscope sts kdate kservice ksigning signature authz
+
+	ts=$(date -u +%s)
+	date=$(date -u -d "@$ts" +%Y-%m-%d 2>/dev/null || date -u +%Y-%m-%d)
+	hashed_payload=$(sha256_hex "$payload")
+	action_lc=$(echo "$action" | tr 'A-Z' 'a-z')
+
+	signed_headers="content-type;host;x-tc-action"
+	canon_headers="content-type:application/json${NL}host:$host${NL}x-tc-action:$action_lc${NL}"
+	canon_req="POST${NL}/${NL}${NL}${canon_headers}${NL}${signed_headers}${NL}${hashed_payload}"
+	hashed_canon=$(printf '%s' "$canon_req" | openssl dgst -sha256 | awk '{print $NF}')
+
+	cscope="$date/$service/tc3_request"
+	sts="TC3-HMAC-SHA256${NL}${ts}${NL}${cscope}${NL}${hashed_canon}"
+
+	kdate=$(hmac_sha256_hex "$(hex_of "TC3$skey")" "$date")
+	kservice=$(hmac_sha256_hex "$kdate" "$service")
+	ksigning=$(hmac_sha256_hex "$kservice" "tc3_request")
+	signature=$(hmac_sha256_hex "$ksigning" "$sts")
+
+	authz="TC3-HMAC-SHA256 Credential=$sid/$cscope, SignedHeaders=$signed_headers, Signature=$signature"
+
+	curl -sS -m 20 -X POST "https://$host" \
+		-H "Authorization: $authz" \
+		-H "Content-Type: application/json" \
+		-H "Host: $host" \
+		-H "X-TC-Action: $action" \
+		-H "X-TC-Timestamp: $ts" \
+		-H "X-TC-Version: 2021-03-23" \
+		-d "$payload" 2>/dev/null
+}
+
+tencent_update() { # sid skey domain sub rtype ip
+	local sid="$1" skey="$2" domain="$3" sub="$4" rtype="$5" ip="$6"
+	local host="dnspod.tencentcloudapi.com" service="dnspod"
+	local payload resp rid cur rec_line found ecode emsg
+	local edomain esub eip
+
+	# DNSPod treats an empty subdomain as the root "@" record
+	[ -z "$sub" ] && sub="@"
+	edomain=$(json_escape "$domain")
+	esub=$(json_escape "$sub")
+	eip=$(json_escape "$ip")
+
+	payload="{\"Domain\":\"$edomain\",\"Subdomain\":\"$esub\",\"RecordType\":\"$rtype\",\"Limit\":100}"
+	resp=$(tc3_call "$sid" "$skey" "$host" "$service" "DescribeRecordList" "$payload")
+	if [ -z "$resp" ]; then
+		log ERROR "[Tencent][$sub.$domain] no response from API (network error)"
+		return 1
+	fi
+
+	split_record "$(pick_record "$resp" "@.Response.RecordList" RecordId RecordLine Value "默认")"
+
+	if [ -z "$rid" ] && echo "$resp" | grep -q '"Error"'; then
+		ecode=$(jsonfilter -s "$resp" -e '@.Response.Error.Code' 2>/dev/null)
+		emsg=$(jsonfilter -s "$resp" -e '@.Response.Error.Message' 2>/dev/null)
+		case "$ecode $emsg" in
+		*NotExist*|*"not found"*) : ;;
+		*) log ERROR "[Tencent][$sub.$domain] describe failed: $ecode $emsg"; return 1 ;;
+		esac
+	fi
+
+	# never silently pick a record on another line; report instead
+	if [ -z "$rid" ] && [ "$found" = "1" ]; then
+		log ERROR "[Tencent][$sub.$domain] records exist but none on line 默认, update skipped"
+		return 1
+	fi
+
+	if [ -n "$rid" ]; then
+		if [ "$cur" = "$ip" ]; then
+			log INFO "[Tencent][$sub.$domain] IP unchanged ($ip)"
+			return 0
+		fi
+		[ -n "$rec_line" ] || rec_line="默认"
+		payload="{\"Domain\":\"$edomain\",\"SubDomain\":\"$esub\",\"RecordId\":$rid,\"RecordType\":\"$rtype\",\"RecordLine\":\"$(json_escape "$rec_line")\",\"Value\":\"$eip\"}"
+		resp=$(tc3_call "$sid" "$skey" "$host" "$service" "ModifyRecord" "$payload")
+	else
+		payload="{\"Domain\":\"$edomain\",\"SubDomain\":\"$esub\",\"RecordType\":\"$rtype\",\"RecordLine\":\"默认\",\"Value\":\"$eip\"}"
+		resp=$(tc3_call "$sid" "$skey" "$host" "$service" "CreateRecord" "$payload")
+	fi
+
+	if [ -z "$resp" ]; then
+		log ERROR "[Tencent][$sub.$domain] no response from API (network error)"
+		return 1
+	fi
+	if echo "$resp" | grep -q '"Error"'; then
+		ecode=$(jsonfilter -s "$resp" -e '@.Response.Error.Code' 2>/dev/null)
+		emsg=$(jsonfilter -s "$resp" -e '@.Response.Error.Message' 2>/dev/null)
+		log ERROR "[Tencent][$sub.$domain] update failed: $ecode $emsg"
+		return 1
+	fi
+	log INFO "[Tencent][$sub.$domain] updated to $ip"
+	return 0
+}
+
+# ---------- DNSPod Token API (旧版), 无签名 ----------
+# POST helper keeps the login token out of any process's argv
+dnspod_post() { # url "k v" ...
+	local url="$1"; shift
+	local body tmp kv k v first
+	body="$STATE_DIR/dnspod.$$.body"
+	tmp="$STATE_DIR/dnspod.$$.kv"
+	: > "$body"
+	: > "$tmp"
+	chmod 600 "$body" "$tmp"
+
+	# one awk pass encodes all pairs; the raw token only flows through pipes
+	for kv in "$@"; do
+		printf '%s\n' "${kv%% *}"
+		printf '%s\n' "${kv#* }"
+	done | urlencode_lines > "$tmp"
+
+	first=1
+	while IFS= read -r k && IFS= read -r v; do
+		[ "$first" = "1" ] || printf '&' >> "$body"
+		first=0
+		printf '%s=%s' "$k" "$v" >> "$body"
+	done < "$tmp"
+	rm -f "$tmp"
+
+	curl -sS -m 20 -X POST "$url" \
+		-H 'Content-Type: application/x-www-form-urlencoded' \
+		--data @"$body" 2>/dev/null
+	rm -f "$body"
+}
+
+dnspod_token_update() { # id token domain sub rtype ip
+	local id="$1" token="$2" domain="$3" sub="$4" rtype="$5" ip="$6"
+	local resp code msg rid cur rec_line found
+
+	[ -z "$sub" ] && sub="@"
+
+	# Record.List
+	resp=$(dnspod_post "https://dnsapi.cn/Record.List" \
+		"login_token $id,$token" "format json" \
+		"domain $domain" "sub_domain $sub" \
+		"record_type $rtype" "offset 0" "length 100")
+
+	if [ -z "$resp" ]; then
+		log ERROR "[DNSPod][$sub.$domain] no response from API (network error)"
+		return 1
+	fi
+
+	code=$(jsonfilter -s "$resp" -e '@.status.code' 2>/dev/null)
+	if [ "$code" != "1" ]; then
+		msg=$(jsonfilter -s "$resp" -e '@.status.message' 2>/dev/null)
+		log ERROR "[DNSPod][$sub.$domain] describe failed: $code $msg"
+		return 1
+	fi
+
+	split_record "$(pick_record "$resp" "@.records" id line value "默认")"
+
+	# never silently pick a record on another line; report instead
+	if [ -z "$rid" ] && [ "$found" = "1" ]; then
+		log ERROR "[DNSPod][$sub.$domain] records exist but none on line 默认, update skipped"
+		return 1
+	fi
+
+	if [ -n "$rid" ]; then
+		if [ "$cur" = "$ip" ]; then
+			log INFO "[DNSPod][$sub.$domain] IP unchanged ($ip)"
+			return 0
+		fi
+		# Modify
+		[ -n "$rec_line" ] || rec_line="默认"
+		resp=$(dnspod_post "https://dnsapi.cn/Record.Modify" \
+			"login_token $id,$token" "format json" \
+			"domain $domain" "record_id $rid" "sub_domain $sub" \
+			"record_type $rtype" "record_line $rec_line" "value $ip")
+	else
+		# Create
+		resp=$(dnspod_post "https://dnsapi.cn/Record.Create" \
+			"login_token $id,$token" "format json" \
+			"domain $domain" "sub_domain $sub" \
+			"record_type $rtype" "record_line 默认" "value $ip")
+	fi
+
+	if [ -z "$resp" ]; then
+		log ERROR "[DNSPod][$sub.$domain] no response from API (network error)"
+		return 1
+	fi
+	code=$(jsonfilter -s "$resp" -e '@.status.code' 2>/dev/null)
+	if [ "$code" != "1" ]; then
+		msg=$(jsonfilter -s "$resp" -e '@.status.message' 2>/dev/null)
+		log ERROR "[DNSPod][$sub.$domain] update failed: $code $msg"
+		return 1
+	fi
+
+	log INFO "[DNSPod][$sub.$domain] updated to $ip"
+	return 0
+}
+
+# ---------- Alibaba Cloud (Alidns) API, HMAC-SHA1 ----------
+aliyun_call() { # ak sk action "K V" "K V" ...
+	local ak="$1" sk="$2" action="$3"; shift 3
+	local ts nonce tmp qs sts sig esig k v
+
+	ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+	nonce=$(openssl rand -hex 16 2>/dev/null)
+	tmp="$STATE_DIR/aliyun.$$.kv"
+
+	{
+		echo "AccessKeyId $ak"
+		echo "Action $action"
+		echo "Format JSON"
+		echo "SignatureMethod HMAC-SHA1"
+		echo "SignatureNonce $nonce"
+		echo "SignatureVersion 1.0"
+		echo "Timestamp $ts"
+		echo "Version 2015-01-09"
+		for kv in "$@"; do echo "$kv"; done
+	} | while IFS=' ' read -r k v; do
+		[ -n "$k" ] && { printf '%s\n' "$k"; printf '%s\n' "$v"; }
+	done | urlencode_lines | awk 'NR % 2 { k = $0; next } { print k, $0 }' | sort -k1,1 > "$tmp"
+
+	qs=$(awk '{printf "%s%s=%s", (NR>1?"&":""), $1, $2}' "$tmp")
+	rm -f "$tmp"
+
+	sts="GET&$(urlencode "/")&$(urlencode "$qs")"
+	sig=$(printf '%s' "$sts" | openssl dgst -sha1 -hmac "${sk}&" -binary | openssl base64 -A)
+	esig=$(urlencode "$sig")
+
+	curl -sS -m 20 "https://alidns.aliyuncs.com/?${qs}&Signature=${esig}" 2>/dev/null
+}
+
+aliyun_update() { # ak sk domain sub rtype ip
+	local ak="$1" sk="$2" domain="$3" sub="$4" rtype="$5" ip="$6"
+	local full resp code msg rid cur rec_line found
+
+	# root "@" records use the bare domain for the query and "@" for RR
+	if [ -z "$sub" ]; then
+		sub="@"
+		full="$domain"
+	else
+		full="$sub.$domain"
+	fi
+
+	resp=$(aliyun_call "$ak" "$sk" "DescribeSubDomainRecords" "SubDomain $full" "Type $rtype" "PageSize 100")
+	if [ -z "$resp" ]; then
+		log ERROR "[Aliyun][$full] no response from API (network error)"
+		return 1
+	fi
+	code=$(jsonfilter -s "$resp" -e '@.Code' 2>/dev/null)
+	if [ -n "$code" ]; then
+		msg=$(jsonfilter -s "$resp" -e '@.Message' 2>/dev/null)
+		log ERROR "[Aliyun][$full] describe failed: $code $msg"
+		return 1
+	fi
+
+	split_record "$(pick_record "$resp" "@.DomainRecords.Record" RecordId Line Value "default")"
+
+	# never silently pick a record on another line; report instead
+	if [ -z "$rid" ] && [ "$found" = "1" ]; then
+		log ERROR "[Aliyun][$full] records exist but none on line default, update skipped"
+		return 1
+	fi
+
+	if [ -n "$rid" ]; then
+		if [ "$cur" = "$ip" ]; then
+			log INFO "[Aliyun][$full] IP unchanged ($ip)"
+			return 0
+		fi
+		resp=$(aliyun_call "$ak" "$sk" "UpdateDomainRecord" "RecordId $rid" "RR $sub" "Type $rtype" "Value $ip")
+	else
+		resp=$(aliyun_call "$ak" "$sk" "AddDomainRecord" "DomainName $domain" "RR $sub" "Type $rtype" "Value $ip")
+	fi
+
+	if [ -z "$resp" ]; then
+		log ERROR "[Aliyun][$full] no response from API (network error)"
+		return 1
+	fi
+	code=$(jsonfilter -s "$resp" -e '@.Code' 2>/dev/null)
+	if [ -n "$code" ]; then
+		msg=$(jsonfilter -s "$resp" -e '@.Message' 2>/dev/null)
+		log ERROR "[Aliyun][$full] update failed: $code $msg"
+		return 1
+	fi
+	log INFO "[Aliyun][$full] updated to $ip"
+	return 0
+}
+
+# ---------- per-service dispatch ----------
+handle_service() {
+	local sec="$1"
+	local enabled provider domain subdomain record_type ip_source iface ip_url custom_ip secret_id secret_key ip v6 rc plabel tc_mode
+
+	config_get_bool enabled "$sec" enabled 1
+	[ "$enabled" = "1" ] || return 0
+
+	SERVICE_COUNT=$((SERVICE_COUNT + 1))
+	if [ "$SERVICE_COUNT" -gt "$MAX_SERVICES" ]; then
+		log ERROR "[$sec] max services reached ($MAX_SERVICES), skipped"
+		return 0
+	fi
+
+	config_get provider "$sec" provider
+	config_get domain "$sec" domain
+	config_get subdomain "$sec" subdomain
+	config_get record_type "$sec" record_type A
+	config_get ip_source "$sec" ip_source iface
+	config_get iface "$sec" iface wan
+	config_get ip_url "$sec" ip_url
+	config_get custom_ip "$sec" custom_ip
+	config_get secret_id "$sec" secret_id
+	config_get secret_key "$sec" secret_key
+
+	# strip stray whitespace from copy-pasted credentials and custom IPs
+	secret_id=$(printf '%s' "$secret_id" | tr -d ' \t\r\n')
+	secret_key=$(printf '%s' "$secret_key" | tr -d ' \t\r\n')
+	custom_ip=$(printf '%s' "$custom_ip" | tr -d ' \t\r\n')
+
+	# provider display label, matching the update-path log tags
+	tc_mode="token"
+	case "$provider:$secret_id" in
+	tencent:AKID*) plabel="Tencent"; tc_mode="cam" ;;
+	tencent:*)     plabel="DNSPod" ;;
+	aliyun:*)      plabel="Aliyun" ;;
+	*)             plabel="$provider" ;;
+	esac
+
+	if [ -z "$domain" ] || [ -z "$secret_id" ] || [ -z "$secret_key" ]; then
+		log ERROR "[$plabel] missing domain/secret_id/secret_key, skipped"
+		return 1
+	fi
+
+	if [ "$ip_source" = "url" ] && [ -z "$ip_url" ]; then
+		# per-record-type default query endpoint (IPv4 vs IPv6)
+		if [ "$record_type" = "AAAA" ]; then
+			ip_url="https://6.ipw.cn"
+		else
+			ip_url="https://4.ipw.cn"
+		fi
+	fi
+
+	v6=0; [ "$record_type" = "AAAA" ] && v6=1
+	ip=$(get_ip "$ip_source" "$iface" "$ip_url" "$custom_ip" "$v6")
+	if [ -z "$ip" ]; then
+		log ERROR "[$plabel][${subdomain}.${domain}] failed to obtain IP address (source=$ip_source iface=$iface)"
+		return 2
+	fi
+	if ! validate_ip "$ip" "$record_type"; then
+		log ERROR "[$plabel][${subdomain}.${domain}] invalid IP ($ip) for record type $record_type"
+		return 1
+	fi
+
+	# validate the provider before dispatching so a typo is reported
+	# instead of silently doing nothing
+	case "$provider" in
+	tencent|aliyun) : ;;
+	*) log ERROR "[$plabel][${subdomain}.${domain}] unknown provider: $provider"; return 1 ;;
+	esac
+
+	case "$provider" in
+	tencent)
+		if [ "$tc_mode" = "cam" ]; then
+			tencent_update "$secret_id" "$secret_key" "$domain" "$subdomain" "$record_type" "$ip"
+		else
+			dnspod_token_update "$secret_id" "$secret_key" "$domain" "$subdomain" "$record_type" "$ip"
+		fi
+		;;
+	aliyun)  aliyun_update  "$secret_id" "$secret_key" "$domain" "$subdomain" "$record_type" "$ip" ;;
+	*) log ERROR "[$plabel][${subdomain}.${domain}] unknown provider: $provider"; return 1 ;;
+	esac
+	rc=$?
+	return $rc
+}
+
+# run one service and record any failure so do_update can report it
+service_failed=0
+run_service() {
+	handle_service "$1" || service_failed=1
+}
+
+do_update() {
+	local genabled
+	config_load "$CFG"
+	config_get LOG_LINES global log_lines 200
+	case "$LOG_LINES" in
+	''|*[!0-9]*) LOG_LINES=200 ;;
+	esac
+	[ "$LOG_LINES" -lt 10 ] && LOG_LINES=10
+	config_get_bool genabled global enabled 1
+	if [ "$genabled" != "1" ]; then
+		log INFO "global switch disabled, manual update skipped"
+		return 0
+	fi
+	lock
+	SERVICE_COUNT=0
+	service_failed=0
+	config_foreach run_service service
+	trim_log
+	unlock
+	return "$service_failed"
+}
+
+do_clearlog() {
+	: > "$LOG_FILE"
+}
+
+# keep the cron entry aligned with the committed update interval
+sync_cron() {
+	local interval cron_expr
+	config_get interval global interval 15
+	case "$interval" in
+	5|10|15|20|30|60) ;;
+	*) interval=15 ;;
+	esac
+	if [ "$interval" = "60" ]; then
+		cron_expr="0 * * * * /usr/bin/cddns guard"
+	else
+		cron_expr="*/$interval * * * * /usr/bin/cddns guard"
+	fi
+	if ! grep -qF "$cron_expr" "$CRON_FILE" 2>/dev/null; then
+		[ -f "$CRON_FILE" ] || { mkdir -p /etc/crontabs; touch "$CRON_FILE"; }
+		sed -i '/usr\/bin\/cddns/d' "$CRON_FILE" 2>/dev/null
+		echo "$cron_expr" >> "$CRON_FILE"
+		[ -x /etc/init.d/cron ] && /etc/init.d/cron restart 2>/dev/null
+	fi
+}
+
+# guard for cron/hotplug triggers: init-disabled is a full stop, global off
+# is a silent standby, stopped services are refused
+do_guard() {
+	config_load "$CFG"
+	config_get_bool genabled global enabled 1
+	# init-disabled must win over the switch so the marker is always cleared
+	if [ -d /etc/rc.d ] && [ -z "$(ls /etc/rc.d/S*cddns 2>/dev/null)" ]; then
+		rm -f "$STATE_DIR/running"
+		[ -x /etc/init.d/cddns ] && /etc/init.d/cddns cleanup 2>/dev/null
+		return 0
+	fi
+	# global off: silent standby (keep marker and cron)
+	[ "$genabled" = "1" ] || return 0
+	# stopped service: refuse triggers
+	[ -f "$STATE_DIR/running" ] || return 0
+	sync_cron
+	do_update
+}
+
+case "$1" in
+update)           do_update ;;
+guard)            do_guard ;;
+start-delayed)    sleep 60; do_guard ;;
+hotplug-delayed)  sleep 10; do_guard ;;
+clearlog)         do_clearlog ;;
+*) echo "usage: $0 {update|guard|start-delayed|hotplug-delayed|clearlog}"; exit 1 ;;
+esac

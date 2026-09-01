@@ -1,0 +1,113 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "CDDNS"
+msgstr "CDDNS"
+
+msgid "Dynamic DNS client for Tencent Cloud (DNSPod / DNSPod Token) and Alibaba Cloud (Alidns)."
+msgstr "腾讯云 (DNSPod / DNSPod Token) 及阿里云 (Alidns) 动态 DNS 客户端。"
+
+msgid "Global Settings"
+msgstr "全局设置"
+
+msgid "Enable"
+msgstr "启用"
+
+msgid "Update Interval (minutes)"
+msgstr "更新间隔（分钟）"
+
+msgid "Log Lines to Keep"
+msgstr "保留日志行数"
+
+msgid "DDNS Services"
+msgstr "DDNS 服务"
+
+msgid "Provider"
+msgstr "服务商"
+
+msgid "Tencent Cloud (DNSPod)"
+msgstr "腾讯云 (DNSPod)"
+
+msgid "Alibaba Cloud (Alidns)"
+msgstr "阿里云 (Alidns)"
+
+msgid "Domain"
+msgstr "域名"
+
+msgid "Subdomain"
+msgstr "子域名"
+
+msgid "Record Type"
+msgstr "记录类型"
+
+msgid "A (IPv4)"
+msgstr "A（IPv4）"
+
+msgid "AAAA (IPv6)"
+msgstr "AAAA（IPv6）"
+
+msgid "IP Source"
+msgstr "IP 来源"
+
+msgid "Network Interface"
+msgstr "网络接口"
+
+msgid "URL"
+msgstr "URL"
+
+msgid "Custom"
+msgstr "自定义"
+
+msgid "Interface"
+msgstr "接口"
+
+msgid "IP Query URL"
+msgstr "IP 查询 URL"
+
+msgid "Custom IP"
+msgstr "自定义 IP"
+
+msgid "SecretId / Token ID"
+msgstr "SecretId / Token ID"
+
+msgid "CAM SecretId (AKIDxxx) or DNSPod Token ID (numeric)"
+msgstr "CAM SecretId（AKIDxxx 开头）或 DNSPod Token ID（纯数字）"
+
+msgid "SecretKey / Token"
+msgstr "SecretKey / Token"
+
+msgid "CAM SecretKey or DNSPod Token value"
+msgstr "CAM SecretKey 或 DNSPod Token 值"
+
+msgid "No log yet."
+msgstr "暂无日志。"
+
+msgid "Update Now"
+msgstr "立即更新"
+
+msgid "Clear Log"
+msgstr "清空日志"
+
+msgid "CDDNS Log"
+msgstr "CDDNS 日志"
+
+msgid "Update triggered."
+msgstr "已触发更新。"
+
+msgid "Refresh every %s seconds."
+msgstr "每 %s 秒刷新。"
+
+msgid "Please enable at least one DDNS service."
+msgstr "请至少启用一个 DDNS 服务。"
+
+msgid "At most %d DDNS services are allowed."
+msgstr "最多允许 %d 个 DDNS 服务。"
+
+msgid "Failed to restart CDDNS: %s"
+msgstr "重启 CDDNS 失败：%s"
+
+msgid "CDDNS is disabled."
+msgstr "CDDNS 已停用。"
+
+msgid "Leave empty for root record (@)"
+msgstr "留空表示根记录（@）"
