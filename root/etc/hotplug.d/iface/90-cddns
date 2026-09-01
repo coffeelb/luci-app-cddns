@@ -1,20 +1,12 @@
 #!/bin/sh
 # CDDNS: run an update right after a relevant WAN interface comes up.
 # This file is package-owned (declarative), so no runtime management needed.
+# Switch/init/running state is re-validated by the delayed guard at fire time.
 [ "$ACTION" = "ifup" ] || exit 0
 
 . /lib/functions.sh
 
 config_load cddns
-
-config_get_bool genabled global enabled 1
-[ "$genabled" = "1" ] || exit 0
-
-# respect the init service state (LuCI System > Startup)
-[ -d /etc/rc.d ] && [ -n "$(ls /etc/rc.d/S*cddns 2>/dev/null)" ] || exit 0
-
-# only react while the service is actually running (stop() clears this)
-[ -f /var/run/cddns/running ] || exit 0
 
 # only react to interfaces used by enabled services (default wan)
 match=0
@@ -29,7 +21,6 @@ iface_pick() {
 config_foreach iface_pick service
 [ "$match" = "1" ] || exit 0
 
-# let DHCP/PPPoE settle inside a cddns process so stop() can terminate it;
-# the delayed mode re-checks the switch at fire time
+# let DHCP/PPPoE settle inside a cddns process so stop() can terminate it
 /usr/bin/cddns hotplug-delayed &
 exit 0

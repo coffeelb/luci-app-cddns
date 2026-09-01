@@ -15,7 +15,7 @@ remove_cron() {
 }
 
 start() {
-	local interval cron_expr enabled boot
+	local enabled boot
 
 	config_load cddns
 	# keep plaintext credentials out of other local users' reach right away
@@ -32,18 +32,8 @@ start() {
 		setsid /usr/bin/cddns start-delayed </dev/null >/dev/null 2>&1 &
 	fi
 
-	# cron drives the configured interval directly; whitelist the values
-	# that map cleanly to cron expressions (60 minutes is hourly)
-	config_get interval global interval 15
-	case "$interval" in
-	5|10|15|20|30) cron_expr="*/$interval * * * * /usr/bin/cddns guard" ;;
-	60)            cron_expr="0 * * * * /usr/bin/cddns guard" ;;
-	*)             cron_expr="*/15 * * * * /usr/bin/cddns guard" ;;
-	esac
-	[ -f "$CRON_FILE" ] || { mkdir -p /etc/crontabs; touch "$CRON_FILE"; }
-	remove_cron
-	echo "$cron_expr" >> "$CRON_FILE"
-	/etc/init.d/cron restart 2>/dev/null
+	# keep the cron entry aligned with the configured interval
+	/usr/bin/cddns sync_cron
 }
 
 # remove the cron entry without restarting cron; start() reloads after writing

@@ -104,7 +104,6 @@ unlock() {
 	[ -f "$LOCK_DIR/pid" ] && [ "$(cat "$LOCK_DIR/pid" 2>/dev/null)" = "$$" ] && rm -rf "$LOCK_DIR"
 }
 
-# ---------- IP acquisition ----------
 get_ip() {
 	local src="$1" iface="$2" url="$3" custom="$4" v6="$5" ip=""
 
@@ -170,7 +169,6 @@ split_record() {
 	found=${rest%%"$TAB"*}
 }
 
-# ---------- Tencent Cloud (DNSPod) API 3.0, TC3-HMAC-SHA256 ----------
 tc3_call() { # sid skey host service action payload
 	local sid="$1" skey="$2" host="$3" service="$4" action="$5" payload="$6"
 	local ts date hashed_payload action_lc canon_headers signed_headers canon_req hashed_canon
@@ -269,7 +267,6 @@ tencent_update() { # sid skey domain sub rtype ip
 	return 0
 }
 
-# ---------- DNSPod Token API (旧版), 无签名 ----------
 # POST helper keeps the login token out of any process's argv
 dnspod_post() { # url "k v" ...
 	local url="$1"; shift
@@ -306,7 +303,6 @@ dnspod_token_update() { # id token domain sub rtype ip
 
 	[ -z "$sub" ] && sub="@"
 
-	# Record.List
 	resp=$(dnspod_post "https://dnsapi.cn/Record.List" \
 		"login_token $id,$token" "format json" \
 		"domain $domain" "sub_domain $sub" \
@@ -337,14 +333,12 @@ dnspod_token_update() { # id token domain sub rtype ip
 			log INFO "[DNSPod][$sub.$domain] IP unchanged ($ip)"
 			return 0
 		fi
-		# Modify
 		[ -n "$rec_line" ] || rec_line="默认"
 		resp=$(dnspod_post "https://dnsapi.cn/Record.Modify" \
 			"login_token $id,$token" "format json" \
 			"domain $domain" "record_id $rid" "sub_domain $sub" \
 			"record_type $rtype" "record_line $rec_line" "value $ip")
 	else
-		# Create
 		resp=$(dnspod_post "https://dnsapi.cn/Record.Create" \
 			"login_token $id,$token" "format json" \
 			"domain $domain" "sub_domain $sub" \
@@ -366,7 +360,6 @@ dnspod_token_update() { # id token domain sub rtype ip
 	return 0
 }
 
-# ---------- Alibaba Cloud (Alidns) API, HMAC-SHA1 ----------
 aliyun_call() { # ak sk action "K V" "K V" ...
 	local ak="$1" sk="$2" action="$3"; shift 3
 	local ts nonce tmp qs sts sig esig k v
@@ -455,7 +448,6 @@ aliyun_update() { # ak sk domain sub rtype ip
 	return 0
 }
 
-# ---------- per-service dispatch ----------
 handle_service() {
 	local sec="$1"
 	local enabled provider domain subdomain record_type ip_source iface ip_url custom_ip secret_id secret_key ip v6 rc plabel tc_mode
@@ -616,8 +608,9 @@ do_guard() {
 case "$1" in
 update)           do_update ;;
 guard)            do_guard ;;
+sync_cron)        config_load "$CFG"; sync_cron ;;
 start-delayed)    sleep 60; do_guard ;;
 hotplug-delayed)  sleep 10; do_guard ;;
 clearlog)         do_clearlog ;;
-*) echo "usage: $0 {update|guard|start-delayed|hotplug-delayed|clearlog}"; exit 1 ;;
+*) echo "usage: $0 {update|guard|sync_cron|start-delayed|hotplug-delayed|clearlog}"; exit 1 ;;
 esac
