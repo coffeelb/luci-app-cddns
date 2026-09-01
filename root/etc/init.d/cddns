@@ -29,7 +29,9 @@ start() {
 	# case the WAN IP is not ready yet; only when enabled
 	config_get_bool enabled global enabled 1
 	if [ "$enabled" = "1" ]; then
-		/usr/bin/cddns start-delayed </dev/null >/dev/null 2>&1 &
+		# setsid detaches the process from rpcd's group so a Save & Apply
+		# restart does not kill it before the delayed check runs
+		setsid /usr/bin/cddns start-delayed </dev/null >/dev/null 2>&1 &
 	fi
 
 	# cron drives the configured interval directly; whitelist the values
