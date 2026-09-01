@@ -15,22 +15,20 @@ remove_cron() {
 }
 
 start() {
-	local interval cron_expr enabled
+	local interval cron_expr enabled boot
 
 	config_load cddns
 	# keep plaintext credentials out of other local users' reach right away
 	chmod 600 /etc/config/cddns 2>/dev/null
 
+	# boot-time backstop only: reloads are already monitoring the WAN
+	[ -d /var/run/cddns ] || boot=1
 	# mark the service as running so hotplug triggers can proceed
 	mkdir -p /var/run/cddns
 	touch /var/run/cddns/running
 
-	# one-shot backstop check ~1 min after every start (boot or reload) in
-	# case the WAN IP is not ready yet; only when enabled
 	config_get_bool enabled global enabled 1
-	if [ "$enabled" = "1" ]; then
-		# setsid detaches the process from rpcd's group so a Save & Apply
-		# restart does not kill it before the delayed check runs
+	if [ "$enabled" = "1" ] && [ "$boot" = "1" ]; then
 		setsid /usr/bin/cddns start-delayed </dev/null >/dev/null 2>&1 &
 	fi
 
