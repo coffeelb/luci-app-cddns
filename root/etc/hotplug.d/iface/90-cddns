@@ -1,7 +1,7 @@
 #!/bin/sh
 # CDDNS: run an update right after a relevant WAN interface comes up.
 # This file is package-owned (declarative), so no runtime management needed.
-# Switch/init/running state is re-validated by the delayed guard at fire time.
+# The switch state is re-validated by the delayed guard at fire time.
 [ "$ACTION" = "ifup" ] || exit 0
 
 . /lib/functions.sh

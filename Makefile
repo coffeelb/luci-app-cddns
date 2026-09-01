@@ -13,6 +13,23 @@ LUCI_DESCRIPTION:=Lightweight DDNS client for Tencent Cloud (DNSPod) and Alibaba
 LUCI_DEPENDS:=+curl +openssl-util +jsonfilter
 LUCI_PKGARCH:=all
 
+define Package/$(PKG_NAME)/conffiles
+/etc/config/cddns
+endef
+
+define Package/$(PKG_NAME)/prerm
+#!/bin/sh
+[ -x /etc/init.d/cddns ] && /etc/init.d/cddns stop >/dev/null 2>&1
+exit 0
+endef
+
+define Package/$(PKG_NAME)/postinst
+#!/bin/sh
+[ -z "$$IPKG_INSTROOT" ] || exit 0
+[ -x /etc/init.d/cddns ] && /etc/init.d/cddns start >/dev/null 2>&1
+exit 0
+endef
+
 include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature

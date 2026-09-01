@@ -21,10 +21,6 @@ start() {
 	# keep plaintext credentials out of other local users' reach right away
 	chmod 600 /etc/config/cddns 2>/dev/null
 
-	# mark the service as running so hotplug triggers can proceed
-	mkdir -p /var/run/cddns
-	touch /var/run/cddns/running
-
 	# one-shot backstop check ~1 min after every start (boot or reload)
 	config_get_bool enabled global enabled 1
 	if [ "$enabled" = "1" ]; then
@@ -41,8 +37,6 @@ cleanup() {
 }
 
 stop() {
-	# clear the running marker so new hotplug triggers are refused
-	rm -f /var/run/cddns/running
 	cleanup
 	# kill in-flight cddns scripts by full cmdline (pkill is not in stock busybox)
 	for f in $(grep -la '/usr/bin/cddns' /proc/[0-9]*/cmdline 2>/dev/null); do

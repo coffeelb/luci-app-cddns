@@ -579,21 +579,12 @@ sync_cron() {
 	fi
 }
 
-# guard for cron/hotplug triggers: init-disabled is a full stop, global off
-# is a silent standby, stopped services are refused
+# guard for cron/hotplug triggers: the global switch is the only gate
 do_guard() {
 	config_load "$CFG"
 	config_get_bool genabled global enabled 1
-	# init-disabled must win over the switch so the marker is always cleared
-	if [ -d /etc/rc.d ] && [ -z "$(ls /etc/rc.d/S*cddns 2>/dev/null)" ]; then
-		rm -f "$STATE_DIR/running"
-		[ -x /etc/init.d/cddns ] && /etc/init.d/cddns cleanup 2>/dev/null
-		return 0
-	fi
-	# global off: silent standby (keep marker and cron)
+	# global off: silent standby (keep cron)
 	[ "$genabled" = "1" ] || return 0
-	# stopped service: refuse triggers
-	[ -f "$STATE_DIR/running" ] || return 0
 	sync_cron
 	do_update
 }
