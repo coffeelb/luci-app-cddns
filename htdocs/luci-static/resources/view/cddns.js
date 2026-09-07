@@ -69,11 +69,9 @@ return view.extend({
 		o = s.option(form.Value, 'domain', _('Domain'));
 		o.placeholder = 'example.com';
 		o.rmempty = false;
-		o.editable = true;
 
 		o = s.option(form.Value, 'subdomain', _('Subdomain'));
 		o.placeholder = _('Leave empty for root record (@)');
-		o.editable = true;
 
 		o = s.option(form.ListValue, 'record_type', _('Record Type'));
 		o.value('A', _('A (IPv4)'));
