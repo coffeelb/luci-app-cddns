@@ -2,7 +2,6 @@
 'require view';
 'require form';
 'require fs';
-'require dom';
 'require ui';
 'require poll';
 
@@ -44,6 +43,41 @@ return view.extend({
 		s.anonymous = true;
 		s.sortable = true;
 		s.nodescriptions = true;
+
+		var renderServices = s.render;
+		s.render = function () {
+			var section = this;
+
+			return renderServices.apply(this, arguments).then(function (sectionEl) {
+				var disabled = m.data.get('cddns', 'global', 'enabled') === '0';
+				var btnUpdate = E('button', {
+					'class': 'btn cbi-button cbi-button-apply',
+					'type': 'button',
+					'click': ui.createHandlerFn(section, function () {
+						if (disabled) {
+							ui.addNotification(null, E('p', _('CDDNS is disabled.')), 'error');
+							return Promise.resolve();
+						}
+						return fs.exec('/usr/bin/cddns', [ 'update' ]).then(function () {
+							ui.addNotification(null, E('p', _('Update triggered.')), 'info');
+						}).catch(function (e) {
+							ui.addNotification(null, E('p', e.message), 'error');
+						});
+					})
+				}, [ _('Update Now') ]);
+				if (disabled)
+					btnUpdate.disabled = true;
+				var title = sectionEl.firstElementChild;
+				var header = E('div', { 'style': 'display:flex; align-items:center; justify-content:space-between; gap:.5em; margin-bottom:.5em' });
+
+				title.style.margin = '0';
+				sectionEl.insertBefore(header, title);
+				header.appendChild(title);
+				header.appendChild(btnUpdate);
+
+				return sectionEl;
+			});
+		};
 
 		// cap the number of DDNS services the UI allows
 		var maxServices = 5;
@@ -117,43 +151,23 @@ return view.extend({
 
 		o = s.option(form.DummyValue, '_logview');
 		o.render = L.bind(function () {
-			var globalEnabled = m.data ? m.data.get('cddns', 'global', 'enabled') : '1';
-			var disabled = (globalEnabled === '0');
-			var logCss = [
-				'#cddns_log { padding:10px; text-align:left; height:320px; overflow:auto; box-sizing:border-box; }',
-				'#cddns_log pre { padding:.5rem; word-break:break-all; margin:0; min-height:100%; box-sizing:border-box; }'
-			].join('\n');
-
-			logBox = E('div', { 'id': 'cddns_log' }, [
-				E('pre', { 'wrap': 'pre' }, [ lastLog || _('No log yet.') ])
-			]);
-
-			var btnUpdate = E('button', {
-				'class': 'btn cbi-button cbi-button-apply',
-				'style': 'margin-left:4px',
-				'click': ui.createHandlerFn(this, function () {
-					if (disabled) {
-						ui.addNotification(null, E('p', _('CDDNS is disabled.')), 'error');
-						return Promise.resolve();
-					}
-					return fs.exec('/usr/bin/cddns', [ 'update' ]).then(function () {
-						ui.addNotification(null, E('p', _('Update triggered.')), 'info');
-					}).catch(function (e) {
-						ui.addNotification(null, E('p', e.message), 'error');
-					});
-				})
-			}, [ _('Update Now') ]);
-			if (disabled)
-				btnUpdate.disabled = true;
+			logBox = E('textarea', {
+				'class': 'cbi-input-textarea',
+				'readonly': 'readonly',
+				'wrap': 'off',
+				'rows': 20,
+				'style': 'width:100%; font-family:monospace; font-size:12px'
+			});
+			logBox.value = lastLog || _('No log yet.');
 
 			var btnClear = E('button', {
-				'class': 'btn',
-				'style': 'margin-left:4px',
+				'class': 'btn cbi-button cbi-button-negative',
+				'type': 'button',
 				'click': ui.createHandlerFn(this, function () {
 					return fs.exec('/usr/bin/cddns', [ 'clearlog' ]).then(function () {
 						lastLog = '';
 						if (logBox) {
-							dom.content(logBox, E('pre', { 'wrap': 'pre' }, [ _('No log yet.') ]));
+							logBox.value = _('No log yet.');
 							logBox.scrollTop = 0;
 						}
 					});
@@ -161,8 +175,10 @@ return view.extend({
 			}, [ _('Clear Log') ]);
 
 			return E('div', { 'style': 'width:100%' }, [
-				E('style', [ logCss ]),
-				E('h3', { 'style': 'align-items:center; display:flex;' }, [ _('CDDNS Log'), btnUpdate, btnClear ]),
+				E('div', { 'style': 'display:flex; align-items:center; justify-content:space-between; gap:.5em; margin-bottom:.5em' }, [
+					E('h3', { 'style': 'margin:0' }, _('CDDNS Log')),
+					btnClear
+				]),
 				logBox,
 				E('div', { 'style': 'text-align:right' },
 					E('small', {}, _('Refresh every %s seconds.').format(5)))
@@ -200,7 +216,7 @@ return view.extend({
 					res = res || '';
 					if (res !== lastLog && logBox) {
 						lastLog = res;
-						dom.content(logBox, E('pre', { 'wrap': 'pre' }, [ res || _('No log yet.') ]));
+						logBox.value = res || _('No log yet.');
 						logBox.scrollTop = logBox.scrollHeight;
 					}
 				}).catch(function () {});
