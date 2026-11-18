@@ -26,13 +26,14 @@ OpenWrt/ImmortalWrt 腾讯云 (DNSPod / DNSPod Token) 及阿里云 (Alidns) 动�
 
 1. 将本目录放入 `package/luci-app-cddns`（或加入自定义 feed 后 `./scripts/feeds install luci-app-cddns`）。
 2. `make menuconfig` → `LuCI` → `Applications` → 勾选 `luci-app-cddns`。
-3. `make package/luci-app-cddns/compile V=s` 生成 ipk。
+3. `make package/luci-app-cddns/compile V=s` 生成安装包。使用 opkg 的固件生成 `.ipk`，使用 apk 的固件（如 OpenWrt 25.12）生成 `.apk`。
 
 ## 配置说明
 
 - 全局：是否启用、更新间隔（可选 5/10/15/20/30/60 分钟，默认 15）、日志保留行数
 - 每条 DDNS 记录：服务商（腾讯云/阿里云）、域名、子域名、记录类型（A/AAAA）、
   IP 来源（网络接口 / URL / 自定义）、SecretId / Token ID、SecretKey / Token
+- 通过 URL 获取 IP 时，仅支持 `http://` 和 `https://`。
 - AAAA（IPv6）记录：IP 来源为"网络接口"时，接口请填承载公网 IPv6 的接口
   （如 `wan6`）；若接口取不到地址，可改用 URL 来源（默认查询 `6.ipw.cn`）
 - 最多添加 5 个 DDNS 服务（前端与后端均限制）

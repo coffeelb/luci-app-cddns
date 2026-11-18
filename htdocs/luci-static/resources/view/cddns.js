@@ -198,16 +198,6 @@ return view.extend({
 			}, this));
 		};
 
-		// restart right after save so cron re-syncs
-		var mapSave = m.save;
-		m.save = function (cb, silent) {
-			return mapSave.call(this, cb, silent).then(function () {
-				return fs.exec('/etc/init.d/cddns', [ 'restart' ]).catch(function (e) {
-					ui.addNotification(null, E('p', _('Failed to restart CDDNS: %s').format(e.message)), 'error');
-				});
-			});
-		};
-
 		return m.render().then(L.bind(function (mapEl) {
 			poll.add(L.bind(function () {
 				return fs.trimmed('/var/log/cddns.log').then(function (res) {

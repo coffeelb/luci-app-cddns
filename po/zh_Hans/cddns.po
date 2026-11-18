@@ -94,17 +94,11 @@ msgstr "CDDNS 日志"
 msgid "Update triggered."
 msgstr "已触发更新。"
 
-msgid "Refresh every %s seconds."
-msgstr "每 %s 秒刷新。"
-
 msgid "Please enable at least one DDNS service."
 msgstr "请至少启用一个 DDNS 服务。"
 
 msgid "At most %d DDNS services are allowed."
 msgstr "最多允许 %d 个 DDNS 服务。"
-
-msgid "Failed to restart CDDNS: %s"
-msgstr "重启 CDDNS 失败：%s"
 
 msgid "CDDNS is disabled."
 msgstr "CDDNS 已停用。"

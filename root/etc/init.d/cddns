@@ -4,6 +4,7 @@
 
 START=99
 STOP=10
+USE_PROCD=1
 
 . /lib/functions.sh
 
@@ -14,7 +15,7 @@ remove_cron() {
 	sed -i '/usr\/bin\/cddns/d' "$CRON_FILE" 2>/dev/null
 }
 
-start() {
+start_service() {
 	local enabled
 
 	config_load cddns
@@ -38,7 +39,7 @@ cleanup() {
 	remove_cron
 }
 
-stop() {
+stop_service() {
 	cleanup
 	# kill in-flight cddns scripts by full cmdline (pkill is not in stock busybox)
 	for f in $(grep -la '/usr/bin/cddns' /proc/[0-9]*/cmdline 2>/dev/null); do
@@ -47,7 +48,11 @@ stop() {
 	done
 }
 
+service_triggers() {
+	procd_add_reload_trigger cddns
+}
+
 reload_service() {
-	stop
-	start
+	stop_service
+	start_service
 }

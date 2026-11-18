@@ -2,7 +2,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-cddns
 PKG_VERSION:=1.0.1
-PKG_RELEASE:=5
+PKG_RELEASE:=9
 
 PKG_LICENSE:=GPL-3.0-or-later
 PKG_MAINTAINER:=CDDNS

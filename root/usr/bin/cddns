@@ -112,11 +112,15 @@ get_ip() {
 		ip="$custom"
 		;;
 	url)
+		case "$url" in
+		http://*|https://*) ;;
+		*) return 1 ;;
+		esac
 		if [ "$v6" = "1" ]; then
-			ip=$(curl -fsS -m 20 "$url" 2>/dev/null | \
+			ip=$(curl -q -fgsS -m 20 --proto "=http,https" -- "$url" 2>/dev/null | \
 				grep -oE '([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}' | head -n1)
 		else
-			ip=$(curl -fsS -m 20 "$url" 2>/dev/null | \
+			ip=$(curl -q -fgsS -m 20 --proto "=http,https" -- "$url" 2>/dev/null | \
 				grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1)
 		fi
 		;;
@@ -207,7 +211,7 @@ tc3_call() { # sid skey host service action payload
 tencent_update() { # sid skey domain sub rtype ip
 	local sid="$1" skey="$2" domain="$3" sub="$4" rtype="$5" ip="$6"
 	local host="dnspod.tencentcloudapi.com" service="dnspod"
-	local payload resp rid cur rec_line found ecode emsg
+	local payload resp rid cur rec_line found ecode emsg count
 	local edomain esub eip
 
 	# DNSPod treats an empty subdomain as the root "@" record
@@ -216,23 +220,35 @@ tencent_update() { # sid skey domain sub rtype ip
 	esub=$(json_escape "$sub")
 	eip=$(json_escape "$ip")
 
-	payload="{\"Domain\":\"$edomain\",\"Subdomain\":\"$esub\",\"RecordType\":\"$rtype\",\"Limit\":100}"
+	payload="{\"Domain\":\"$edomain\",\"SubDomain\":\"$esub\",\"RecordType\":\"$rtype\",\"Limit\":100}"
 	resp=$(tc3_call "$sid" "$skey" "$host" "$service" "DescribeRecordList" "$payload")
 	if [ -z "$resp" ]; then
 		log ERROR "[Tencent][$sub.$domain] no response from API (network error)"
 		return 1
 	fi
 
-	split_record "$(pick_record "$resp" "@.Response.RecordList" RecordId RecordLine Value "默认")"
-
-	if [ -z "$rid" ] && echo "$resp" | grep -q '"Error"'; then
-		ecode=$(jsonfilter -s "$resp" -e '@.Response.Error.Code' 2>/dev/null)
-		emsg=$(jsonfilter -s "$resp" -e '@.Response.Error.Message' 2>/dev/null)
-		case "$ecode $emsg" in
-		*NotExist*|*"not found"*) : ;;
-		*) log ERROR "[Tencent][$sub.$domain] describe failed: $ecode $emsg"; return 1 ;;
+	ecode=$(jsonfilter -s "$resp" -e '@.Response.Error.Code' 2>/dev/null)
+	case "$ecode" in
+	ResourceNotFound.NoDataOfRecord)
+		rid=""; found=0
+		;;
+	'')
+		count=$(jsonfilter -s "$resp" -e '@.Response.RecordCountInfo.ListCount' 2>/dev/null)
+		case "$count" in
+		''|*[!0-9]*) log ERROR "[Tencent][$sub.$domain] invalid record list response"; return 1 ;;
 		esac
-	fi
+		split_record "$(pick_record "$resp" "@.Response.RecordList" RecordId Line Value "默认")"
+		if [ "$count" -ne 0 ] && [ "$found" = "0" ]; then
+			log ERROR "[Tencent][$sub.$domain] invalid record list response"
+			return 1
+		fi
+		;;
+	*)
+		emsg=$(jsonfilter -s "$resp" -e '@.Response.Error.Message' 2>/dev/null)
+		log ERROR "[Tencent][$sub.$domain] describe failed: $ecode $emsg"
+		return 1
+		;;
+	esac
 
 	# never silently pick a record on another line; report instead
 	if [ -z "$rid" ] && [ "$found" = "1" ]; then

@@ -10,8 +10,7 @@
 		},
 		"write": {
 			"file": {
-				"/usr/bin/cddns": [ "exec" ],
-				"/etc/init.d/cddns": [ "exec" ]
+				"/usr/bin/cddns": [ "exec" ]
 			},
 			"uci": [ "cddns" ]
 		}
