@@ -174,14 +174,12 @@ return view.extend({
 				})
 			}, [ _('Clear Log') ]);
 
-			return E('div', { 'style': 'width:100%' }, [
+			return E('div', { 'style': 'width:100%; padding-bottom:.5rem' }, [
 				E('div', { 'style': 'display:flex; align-items:center; justify-content:space-between; gap:.5em; margin-bottom:.5em' }, [
 					E('h3', { 'style': 'margin:0' }, _('CDDNS Log')),
 					btnClear
 				]),
-				logBox,
-				E('div', { 'style': 'text-align:right' },
-					E('small', {}, _('Refresh every %s seconds.').format(5)))
+				logBox
 			]);
 		}, this);
 
