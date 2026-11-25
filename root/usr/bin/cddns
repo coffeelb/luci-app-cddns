@@ -20,6 +20,7 @@ TAB=$(printf '\t')
 mkdir -p "$STATE_DIR"
 # keep plaintext credentials out of other local users' reach (uci rewrites this on save)
 chmod 600 /etc/config/cddns 2>/dev/null
+trap 'rm -f "$STATE_DIR/dnspod.$$."* "$STATE_DIR/aliyun.$$."*; unlock' EXIT INT TERM
 
 log() {
 	local lvl="$1"; shift

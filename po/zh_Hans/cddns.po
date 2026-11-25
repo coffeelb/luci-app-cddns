@@ -70,14 +70,8 @@ msgstr "自定义 IP"
 msgid "SecretId / Token ID"
 msgstr "SecretId / Token ID"
 
-msgid "CAM SecretId (AKIDxxx) or DNSPod Token ID (numeric)"
-msgstr "CAM SecretId（AKIDxxx 开头）或 DNSPod Token ID（纯数字）"
-
 msgid "SecretKey / Token"
 msgstr "SecretKey / Token"
-
-msgid "CAM SecretKey or DNSPod Token value"
-msgstr "CAM SecretKey 或 DNSPod Token 值"
 
 msgid "No log yet."
 msgstr "暂无日志。"
@@ -105,3 +99,6 @@ msgstr "CDDNS 已停用。"
 
 msgid "Leave empty for root record (@)"
 msgstr "留空表示根记录（@）"
+
+msgid "Update failed, please check the log."
+msgstr "更新失败，请查看下方日志。"

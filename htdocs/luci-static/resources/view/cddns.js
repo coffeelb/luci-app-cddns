@@ -4,6 +4,7 @@
 'require fs';
 'require ui';
 'require poll';
+'require tools.widgets as widgets';
 
 return view.extend({
 	load: function () {
@@ -14,6 +15,19 @@ return view.extend({
 		var m, s, o;
 		var lastLog = logdata || '';
 		var logBox = null;
+
+		var refreshLog = function () {
+			return fs.trimmed('/var/log/cddns.log').then(function (res) {
+				res = res || '';
+				if (res !== lastLog && logBox) {
+					var atBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 20;
+					lastLog = res;
+					logBox.value = res || _('No log yet.');
+					if (atBottom)
+						logBox.scrollTop = logBox.scrollHeight;
+				}
+			}).catch(function () {});
+		};
 
 		m = new form.Map('cddns', _('CDDNS'),
 			_('Dynamic DNS client for Tencent Cloud (DNSPod / DNSPod Token) and Alibaba Cloud (Alidns).'));
@@ -55,13 +69,17 @@ return view.extend({
 					'type': 'button',
 					'click': ui.createHandlerFn(section, function () {
 						if (disabled) {
-							ui.addNotification(null, E('p', _('CDDNS is disabled.')), 'error');
+							ui.addNotification(null, E('p', _('CDDNS is disabled.')), 'danger');
 							return Promise.resolve();
 						}
-						return fs.exec('/usr/bin/cddns', [ 'update' ]).then(function () {
-							ui.addNotification(null, E('p', _('Update triggered.')), 'info');
+						return fs.exec('/usr/bin/cddns', [ 'update' ]).then(function (res) {
+							if (res && res.code !== 0)
+								ui.addNotification(null, E('p', _('Update failed, please check the log.')), 'danger');
+							else
+								ui.addNotification(null, E('p', _('Update triggered.')), 'info');
+							window.setTimeout(refreshLog, 1000);
 						}).catch(function (e) {
-							ui.addNotification(null, E('p', e.message), 'error');
+							ui.addNotification(null, E('p', e.message), 'danger');
 						});
 					})
 				}, [ _('Update Now') ]);
@@ -106,6 +124,9 @@ return view.extend({
 
 		o = s.option(form.Value, 'subdomain', _('Subdomain'));
 		o.placeholder = _('Leave empty for root record (@)');
+		o.textvalue = function (section_id) {
+			return this.cfgvalue(section_id) || '@';
+		};
 
 		o = s.option(form.ListValue, 'record_type', _('Record Type'));
 		o.value('A', _('A (IPv4)'));
@@ -119,9 +140,10 @@ return view.extend({
 		o.default = 'iface';
 		o.modalonly = true;
 
-		o = s.option(form.Value, 'iface', _('Interface'));
+		o = s.option(widgets.NetworkSelect, 'iface', _('Interface'));
 		o.depends('ip_source', 'iface');
 		o.default = 'wan';
+		o.nocreate = true;
 		o.modalonly = true;
 
 		o = s.option(form.Value, 'ip_url', _('IP Query URL'));
@@ -134,20 +156,49 @@ return view.extend({
 		o.modalonly = true;
 
 		o = s.option(form.Value, 'secret_id', _('SecretId / Token ID'));
-		o.placeholder = _('CAM SecretId (AKIDxxx) or DNSPod Token ID (numeric)');
 		o.rmempty = false;
 		o.modalonly = true;
 
 		o = s.option(form.Value, 'secret_key', _('SecretKey / Token'));
 		o.password = true;
-		o.placeholder = _('CAM SecretKey or DNSPod Token value');
 		o.rmempty = false;
 		o.modalonly = true;
 
 		s = m.section(form.TypedSection, 'logview', _('CDDNS Log'));
 		s.anonymous = true;
-		s.hidetitle = true;
 		s.cfgsections = function () { return [ 'logview' ]; };
+
+		var renderLogSection = s.render;
+		s.render = function () {
+			var section = this;
+
+			return renderLogSection.apply(this, arguments).then(function (sectionEl) {
+				var btnClear = E('button', {
+					'class': 'btn cbi-button cbi-button-negative',
+					'type': 'button',
+					'click': ui.createHandlerFn(section, function () {
+						return fs.exec('/usr/bin/cddns', [ 'clearlog' ]).then(function () {
+							lastLog = '';
+							if (logBox) {
+								logBox.value = _('No log yet.');
+								logBox.scrollTop = 0;
+							}
+						}).catch(function (e) {
+							ui.addNotification(null, E('p', e.message), 'danger');
+						});
+					})
+				}, [ _('Clear Log') ]);
+				var title = sectionEl.firstElementChild;
+				var header = E('div', { 'style': 'display:flex; align-items:center; justify-content:space-between; gap:.5em; margin-bottom:.5em' });
+
+				title.style.margin = '0';
+				sectionEl.insertBefore(header, title);
+				header.appendChild(title);
+				header.appendChild(btnClear);
+
+				return sectionEl;
+			});
+		};
 
 		o = s.option(form.DummyValue, '_logview');
 		o.render = L.bind(function () {
@@ -156,31 +207,11 @@ return view.extend({
 				'readonly': 'readonly',
 				'wrap': 'off',
 				'rows': 20,
-				'style': 'width:100%; font-family:monospace; font-size:12px'
+				'style': 'width:100%; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.45'
 			});
 			logBox.value = lastLog || _('No log yet.');
 
-			var btnClear = E('button', {
-				'class': 'btn cbi-button cbi-button-negative',
-				'type': 'button',
-				'click': ui.createHandlerFn(this, function () {
-					return fs.exec('/usr/bin/cddns', [ 'clearlog' ]).then(function () {
-						lastLog = '';
-						if (logBox) {
-							logBox.value = _('No log yet.');
-							logBox.scrollTop = 0;
-						}
-					});
-				})
-			}, [ _('Clear Log') ]);
-
-			return E('div', { 'style': 'width:100%; padding-bottom:.5rem' }, [
-				E('div', { 'style': 'display:flex; align-items:center; justify-content:space-between; gap:.5em; margin-bottom:.5em' }, [
-					E('h3', { 'style': 'margin:0' }, _('CDDNS Log')),
-					btnClear
-				]),
-				logBox
-			]);
+			return E('div', { 'style': 'width:100%' }, [ logBox ]);
 		}, this);
 
 		var mapParse = m.parse;
@@ -199,16 +230,14 @@ return view.extend({
 		};
 
 		return m.render().then(L.bind(function (mapEl) {
-			poll.add(L.bind(function () {
-				return fs.trimmed('/var/log/cddns.log').then(function (res) {
-					res = res || '';
-					if (res !== lastLog && logBox) {
-						lastLog = res;
-						logBox.value = res || _('No log yet.');
-						logBox.scrollTop = logBox.scrollHeight;
-					}
-				}).catch(function () {});
-			}, this), 5);
+			window.setTimeout(function () {
+				if (logBox && lastLog)
+					logBox.scrollTop = logBox.scrollHeight;
+			}, 0);
+
+			poll.add(function () {
+				return document.hidden ? Promise.resolve() : refreshLog();
+			}, 5);
 
 			return mapEl;
 		}, this));

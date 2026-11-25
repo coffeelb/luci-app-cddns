@@ -6,7 +6,10 @@
 				"/var/log/cddns.log": [ "read" ],
 				"/tmp/log/cddns.log": [ "read" ]
 			},
-			"uci": [ "cddns" ]
+			"ubus": {
+				"network.interface": [ "dump" ]
+			},
+			"uci": [ "cddns", "network" ]
 		},
 		"write": {
 			"file": {
